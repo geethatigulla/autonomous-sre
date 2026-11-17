@@ -1,0 +1,17 @@
+.git
+.github
+.venv
+.venv-linux
+venv
+**/__pycache__
+**/*.py[cod]
+**/.pytest_cache
+.ruff_cache
+.env
+.env.*
+!.env.example
+*.db
+*.sqlite*
+*.log
+*.local_traces.jsonl
+tests

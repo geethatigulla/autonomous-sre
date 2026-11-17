@@ -1,0 +1,41 @@
+# Runs the orchestrator (dashboard on :8000) and the victim app (:9000).
+#
+#   cp .env.example .env   # fill in OPENAI_API_KEY, GITHUB_TOKEN, GITHUB_REPO
+#   docker compose up --build
+#   open http://localhost:8000/        # dashboard
+#   curl http://localhost:8000/ready   # what's configured / missing
+#
+# Pick the seeded bug with BUG_MODE (none | null_deref | regression):
+#   BUG_MODE=null_deref docker compose up --build
+#   curl -X POST localhost:9000/shorten -H 'content-type: application/json' -d '{"url": null}'
+# (config_error crashes the victim at startup by design; trigger that one from
+#  the dashboard's "Trigger Incident" button instead.)
+
+services:
+  orchestrator:
+    build: .
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      DATABASE_URL: sqlite:////data/sre.db
+      LOCAL_TRACE_PATH: /data/local_traces.jsonl
+    ports:
+      - "8000:8000"
+    volumes:
+      - sre-data:/data
+    restart: unless-stopped
+
+  victim:
+    build: ./victim_app
+    environment:
+      BUG_MODE: ${BUG_MODE:-none}
+      ORCHESTRATOR_WEBHOOK_URL: http://orchestrator:8000/webhooks/alert
+    ports:
+      - "9000:9000"
+    depends_on:
+      orchestrator:
+        condition: service_healthy
+
+volumes:
+  sre-data:
