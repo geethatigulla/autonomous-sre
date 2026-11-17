@@ -1,12 +1,192 @@
 # Autonomous SRE
 
-**A multi-agent system that takes an alert from production all the way to a merged-ready pull request — with zero human input in the loop.**
+[![CI](https://github.com/geethatigulla/autonomous-sre/actions/workflows/ci.yml/badge.svg)](https://github.com/geethatigulla/autonomous-sre/actions/workflows/ci.yml)
+![Python](https://img.shields.io/badge/python-3.11%20%7C%203.12-blue)
+![FastAPI](https://img.shields.io/badge/FastAPI-control%20plane-009688)
 
-It's 3 AM. Your URL-shortener just crashed on a null input. Instead of paging
-the on-call engineer, a webhook fires into this orchestrator: five agents
-classify the failure, read the offending code on GitHub, draft and verify a
-fix in a sandbox, open a real PR, and ping Slack — usually in under a minute.
-A human reviews and merges; the engineer keeps sleeping.
+**A multi-agent system that takes an alert from production all the way to a ready-to-merge pull request, with no human in the loop until review.**
+
+It's 3 AM. Your URL shortener just crashed on a null input. Instead of paging
+the on-call engineer, a webhook fires into this orchestrator: five kinds of
+agent classify the failure, read the offending code on GitHub, draft and
+verify a fix in a sandbox, open a real PR, and ping Slack, typically within
+one to two minutes. A human reviews and merges; the engineer keeps sleeping.
+
+## Contents
+
+- [Overview](#overview)
+- [How it works](#how-it-works)
+- [Tech stack](#tech-stack)
+- [How it's built](#how-its-built)
+- [Safety model](#safety-model)
+- [What it does](#what-it-does)
+- [Architecture](#architecture)
+- [Quickstart](#quickstart)
+- [API reference](#api-reference)
+- [Demo](#demo)
+- [Project structure](#project-structure)
+- [Configuration](#configuration)
+- [Observability](#observability--omium-tracing)
+- [Testing](#testing)
+- [Design decisions](#design-decisions)
+- [Limitations and future work](#limitations-and-future-work)
+- [Contributing](#contributing)
+
+## Overview
+
+### The problem
+
+When production breaks, the first part of the response is mostly the same
+every time: someone gets paged, reads the stack trace, finds the file that
+threw, works out what changed recently, writes a small fix, runs the
+tests, and opens a pull request. For a large class of everyday bugs (a
+missing null check, a renamed field, a misnamed environment variable) that
+loop is mechanical, but it still costs an engineer's sleep and adds
+minutes to hours of downtime.
+
+### The solution
+
+Autonomous SRE automates that loop from the moment the error happens to the
+moment a reviewed fix is ready to merge:
+
+1. The failing service reports its exception to the orchestrator.
+2. A team of specialised AI agents diagnoses it, reads the real source
+   code, and writes candidate fixes.
+3. A deterministic verifier runs the project's own tests against each fix.
+   Only a fix that makes the tests pass goes forward.
+4. The system opens a pull request with a full explanation and notifies
+   the team, and a human makes the final call by merging it (or not).
+
+Anything it can't classify confidently is **escalated to a human** instead
+of guessed at.
+
+### Who it's for
+
+- **SRE and platform teams** exploring how far AI agents can safely take
+  incident response.
+- **Engineers learning multi-agent design**: the codebase is a compact,
+  fully traced example of agents with narrow roles, tool use, parallel
+  hypotheses, and verification by tests rather than by trusting the model.
+- **Demo and research use.** It ships with a deliberately buggy app
+  (`victim_app/`) so you can watch the whole pipeline work end to end.
+
+## How it works
+
+Following a single incident from crash to pull request:
+
+1. **Crash.** A request to the victim app hits a seeded bug, for example
+   `POST /shorten {"url": null}` calls `.strip()` on `None`.
+2. **Report.** The app's monitor middleware catches the exception, scrubs
+   secrets and personal data out of it, and POSTs it to
+   `/webhooks/alert`.
+3. **Accept.** The orchestrator saves an `Incident` row, replies `202`
+   immediately, and hands the incident to its background job queue.
+4. **Triage.** The **Triager** classifies it as `null_deref`,
+   `recent_regression`, `config_error` or `unknown`, with a severity and a
+   confidence. `unknown` stops here and is escalated to a human.
+5. **Investigate.** The **Investigator** calls tools: it reads files and
+   recent commits from GitHub (and optionally searches the web) to find the
+   suspect file and line and rank root-cause hypotheses. Tool calls are
+   capped per incident.
+6. **Fix race.** Two **Fix Authors** run in parallel with different
+   philosophies: *defensive* (fail fast with a clear error) and
+   *permissive* (fall back gracefully). Each produces a unified diff.
+7. **Verify.** For each diff, the **Verifier** copies the source into a
+   temporary directory, applies the patch with `git apply`, and runs the
+   project's pytest suite. The exit code is the verdict, not the model's
+   opinion. The first verified fix wins.
+8. **Release.** The **Releaser** writes the PR title, description and
+   commit message, creates an `autosre/inc-<id>` branch, commits the fix,
+   opens the pull request, and posts to Slack.
+9. **Observe.** Every step streams live to the dashboard at `/` and is
+   recorded as a trace span (in Omium and/or a local JSONL file).
+
+The incident moves through
+`received → classified → investigated → fix_drafted → verified → released`.
+Any failed step moves it to a terminal failure status and stops the
+pipeline. It never pushes on hoping a later step will recover.
+
+## Tech stack
+
+| Layer | Technology |
+|---|---|
+| Language | Python 3.11+ |
+| Web framework | FastAPI + Uvicorn (orchestrator and victim app) |
+| Data | SQLite via SQLModel / SQLAlchemy |
+| AI | OpenAI `gpt-4o` (Investigator, Fix Authors) and `gpt-4o-mini` (Triager, Releaser), with tool calling and JSON output |
+| Integrations | GitHub (PyGithub), Tavily web search, Slack incoming webhooks |
+| Verification | `git apply` + pytest in a temporary-directory sandbox |
+| Live UI | Server-Sent Events (`sse-starlette`) + a single-page HTML dashboard |
+| Observability | Omium tracing SDK, with a local JSONL trace that is always written |
+| Tooling | pytest, ruff, Docker / Docker Compose, GitHub Actions |
+
+## How it's built
+
+The project is organised as a **control plane plus agents plus tools**, and
+a handful of engineering rules shape every part of it.
+
+**1. A deterministic state machine coordinates non-deterministic agents.**
+`orchestration/state_machine.py` owns the order of steps, the status
+transitions and the error handling. Agents never call each other. They
+take an incident in and hand a structured result back. Every agent run is
+written to an `AgentRun` row before it starts and again when it finishes,
+so the dashboard and database always show what is in flight.
+
+**2. Each agent has one job and a narrow toolbelt.** Agents share a
+`BaseAgent` (`agents/base.py`) that handles the LLM call, tracing spans and
+JSON parsing. Each subclass has a focused system prompt and only the tools
+it needs: the Triager has none, the Investigator can read GitHub and
+search, the Fix Authors only read the suspect file. Outputs are JSON, and
+they are validated and coerced before the next step uses them.
+
+**3. Tools wrap every external side-effect.** GitHub, web search, the
+sandbox, the diff applier and Slack each live in `orchestrator/tools/`.
+Every tool degrades cleanly when its credentials are missing (it reports
+itself disabled rather than crashing), which is what lets the app boot,
+and the tests run, with no keys at all.
+
+**4. Tests are the ground truth.** The Verifier contains no LLM. A patch is
+accepted only if the target project's own tests pass after applying it in
+an isolated copy of the source. That is also why two Fix Authors race: two
+genuinely different fixes give the Verifier two real chances.
+
+**5. Humans keep the last word.** The system never pushes to `main`. It
+opens a pull request on its own branch, and merging stays a human
+decision.
+
+**6. Observability is built in.** Every LLM call, tool call, sandbox run and
+GitHub action is a span in one causal trace per incident. The tracing
+wrapper swallows its own failures, so an observability outage can't break
+incident response.
+
+**7. Everything is testable offline.** The test suite (about 100 tests)
+uses a fake OpenAI client, a fake GitHub tool and a temporary SQLite
+database, so it runs in seconds with no network and no credentials. CI runs
+lint and tests on Python 3.11 and 3.12 and builds both Docker images.
+
+The code is split so each piece can be read on its own: `agents/` (the
+reasoning), `tools/` (the side-effects), `orchestration/` (the control
+flow), `webhooks/` and `dashboard/` (the HTTP surface), and `victim_app/`
+(the system under repair).
+
+## Safety model
+
+Letting an AI change code calls for guard rails. These are the ones built in:
+
+- **No direct writes to production code.** Fixes arrive as pull requests on
+  an `autosre/*` branch; a person merges.
+- **Verified or nothing.** A fix that doesn't pass the test suite in the
+  sandbox is never proposed.
+- **Escalate when unsure.** Unclassifiable incidents go to a human with no
+  PR opened.
+- **Secrets never leave the app.** `victim_app/scrubber.py` redacts API
+  keys, bearer tokens, JWTs, private keys, passwords, email addresses and
+  card numbers from crash reports *before* they are sent anywhere.
+- **Bounded behaviour.** The Investigator has a tool-call budget, pytest
+  runs under a timeout, and the job queue caps how many incidents run at
+  once.
+- **Point it at a test repo.** The GitHub token you supply can open PRs, so
+  use a dedicated victim repository, never a production one.
 
 ## What it does
 
@@ -147,7 +327,7 @@ plus model latency.
 macOS / Linux:
 
 ```bash
-git clone <your-fork-url> autonomous-sre
+git clone https://github.com/geethatigulla/autonomous-sre.git
 cd autonomous-sre
 python3.11 -m venv .venv
 source .venv/bin/activate
@@ -157,7 +337,7 @@ pip install -r requirements.lock
 Windows (PowerShell):
 
 ```powershell
-git clone <your-fork-url> autonomous-sre
+git clone https://github.com/geethatigulla/autonomous-sre.git
 cd autonomous-sre
 py -3.11 -m venv .venv
 .venv\Scripts\Activate.ps1
@@ -245,6 +425,37 @@ http://localhost:8000/
 ```
 
 Live SSE view of every incident, agent run, span, and final PR link.
+
+## API reference
+
+Orchestrator (default `http://localhost:8000`):
+
+| Method | Path | Purpose |
+|---|---|---|
+| `POST` | `/webhooks/alert` | Report an exception; returns `202` with an `incident_id` |
+| `GET` | `/webhooks/alert` | The 50 most recent incidents |
+| `GET` | `/webhooks/alert/{incident_id}` | One incident plus all of its agent runs |
+| `GET` | `/health` | Liveness probe |
+| `GET` | `/ready` | Readiness: `200` when configured, `503` with the list of missing settings |
+| `GET` | `/` | Live dashboard |
+| `GET` | `/events/stream` | Server-Sent Events feed the dashboard listens to |
+| `GET` | `/api/metrics` | Totals, success rate, average resolution time, counts per class |
+| `GET` | `/api/incidents/recent` | Recent incidents for the dashboard sidebar |
+| `POST` | `/api/test/trigger?bug=null_deref` | Fire a synthetic incident (`null_deref`, `regression`, `config_error`, `unknown`) |
+
+Example alert:
+
+```bash
+curl -X POST http://localhost:8000/webhooks/alert \
+  -H "content-type: application/json" \
+  -d '{"source_service": "victim_app", "endpoint": "POST /shorten",
+       "exception_class": "AttributeError",
+       "exception_message": "NoneType object has no attribute strip",
+       "traceback": "...", "request_body": "{\"url\": null}"}'
+```
+
+Victim app (default `http://localhost:9000`): `POST /shorten`,
+`GET /expand/{short}`, `GET /stats`, `GET /healthz`.
 
 ## Demo
 
@@ -629,6 +840,17 @@ Planned next steps: generation of regression tests alongside the fix,
 confidence-based auto-merge for low-risk classes, and a retry-with-feedback
 loop so a `tests_failed` Verifier verdict can re-prompt the Fix Author with
 the failing pytest output.
+
+## Contributing
+
+1. Fork the repo and create a branch.
+2. Install the dev dependencies: `pip install -r requirements-dev.txt`.
+3. Make your change with tests, then run `ruff check .` and `pytest`.
+4. Open a pull request. CI runs the same checks.
+
+Good first areas: a new bug class (a Triager label, Investigator guidance,
+and a seeded bug plus test in `victim_app/`), a Docker-backed sandbox, or a
+retry loop that feeds failing test output back to the Fix Authors.
 
 ## Dependencies
 
