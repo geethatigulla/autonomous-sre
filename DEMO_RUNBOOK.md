@@ -14,7 +14,7 @@ are no curl commands, no environment juggling, no manual GitHub clicks.
 ### 1.1 Repo is clean
 
 ```bash
-cd autonomous-sre
+cd incident-autopilot
 git status            # must be clean, on the demo branch
 git pull --ff-only
 ```

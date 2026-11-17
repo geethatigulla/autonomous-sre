@@ -1,6 +1,6 @@
 # Autonomous SRE
 
-[![CI](https://github.com/geethatigulla/autonomous-sre/actions/workflows/ci.yml/badge.svg)](https://github.com/geethatigulla/autonomous-sre/actions/workflows/ci.yml)
+[![CI](https://github.com/geethatigulla/incident-autopilot/actions/workflows/ci.yml/badge.svg)](https://github.com/geethatigulla/incident-autopilot/actions/workflows/ci.yml)
 ![Python](https://img.shields.io/badge/python-3.11%20%7C%203.12-blue)
 ![FastAPI](https://img.shields.io/badge/FastAPI-control%20plane-009688)
 
@@ -327,8 +327,8 @@ plus model latency.
 macOS / Linux:
 
 ```bash
-git clone https://github.com/geethatigulla/autonomous-sre.git
-cd autonomous-sre
+git clone https://github.com/geethatigulla/incident-autopilot.git
+cd incident-autopilot
 python3.11 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.lock
@@ -337,8 +337,8 @@ pip install -r requirements.lock
 Windows (PowerShell):
 
 ```powershell
-git clone https://github.com/geethatigulla/autonomous-sre.git
-cd autonomous-sre
+git clone https://github.com/geethatigulla/incident-autopilot.git
+cd incident-autopilot
 py -3.11 -m venv .venv
 .venv\Scripts\Activate.ps1
 pip install -r requirements.lock
@@ -521,7 +521,7 @@ Total duration:  37.4s
 ## Project structure
 
 ```
-autonomous-sre/
+incident-autopilot/
 ├── orchestrator/                  # The FastAPI + SQLite control plane
 │   ├── main.py                    # App entry, lifespan, /health + /ready, router mounts
 │   ├── config.py                  # Settings (pydantic-settings, reads .env)
