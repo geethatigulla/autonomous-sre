@@ -1,0 +1,1511 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>AUTONOMOUS SRE</title>
+<link rel="icon" type="image/svg+xml" href='data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20"><path d="M10 1.5 L18.5 10 L10 18.5 L1.5 10 Z" fill="none" stroke="%233DD68C" stroke-width="1.6" stroke-linejoin="round"/><circle cx="10" cy="10" r="2.6" fill="%233DD68C"/></svg>' />
+<style>
+/* ============================================================
+   AUTONOMOUS SRE — operator dashboard
+   Single self-contained file. Vanilla JS, no external deps.
+   Calm, restrained, intentional. Greyscale + one accent.
+   ============================================================ */
+
+:root {
+  /* Surfaces */
+  --bg:              #0B0C0E;
+  --surface:         #131417;
+  --surface-hover:   #17181C;
+  --surface-inset:   #0E0F11;
+  --border:          #232428;
+  --border-strong:   #2E2F35;
+
+  /* Text */
+  --text:            #ECEDEE;
+  --text-secondary:  #9B9DA3;
+  --text-tertiary:   #6A6C72;
+
+  /* Accent — one only, "the system is healthy/active" */
+  --accent:          #3DD68C;
+  --accent-hover:    #4EE69B;
+  --accent-dim:      #1F3D30;
+  --accent-fg:       #04140C;
+
+  /* Status — used ONLY in badges, agent dots, log event types */
+  --status-success:  #3DD68C;
+  --status-running:  #E0A93D;
+  --status-failed:   #E5484D;
+  --status-info:     #5E9EFF;
+  --status-escalated:#D9904B;
+
+  /* Type */
+  --font-ui:   -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, system-ui, sans-serif;
+  --font-mono: "SF Mono", "JetBrains Mono", ui-monospace, "Cascadia Code", Menlo, Consolas, monospace;
+
+  /* Radii */
+  --r-card:   10px;
+  --r-metric: 8px;
+  --r-pill:   6px;
+
+  /* Subtle elevation — no color glow */
+  --shadow-card: 0 1px 2px rgba(0,0,0,0.4);
+}
+
+*, *::before, *::after { box-sizing: border-box; }
+
+html, body {
+  margin: 0; padding: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font-ui);
+  font-size: 13px; line-height: 1.5;
+  min-height: 100vh;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  font-feature-settings: "ss01", "cv11";
+}
+
+a       { color: var(--accent); text-decoration: none; }
+a:hover { text-decoration: underline; text-underline-offset: 2px; }
+
+::selection { background: rgba(61,214,140,0.25); color: var(--text); }
+
+/* ============================================================
+   TOP BAR — 56px, border-bottom only.
+   left: brand · center: arch strip · right: status + trigger
+   ============================================================ */
+.topbar {
+  display: grid;
+  grid-template-columns: minmax(0, auto) minmax(0, 1fr) minmax(0, auto);
+  align-items: center;
+  gap: 24px;
+  height: 56px;
+  padding: 0 24px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg);
+  position: sticky; top: 0; z-index: 30;
+}
+
+.brand {
+  display: flex; align-items: center; gap: 10px;
+  color: var(--text);
+  min-width: 0;
+}
+.brand .mark {
+  width: 18px; height: 18px;
+  display: inline-flex; align-items: center; justify-content: center;
+  color: var(--accent);
+  flex-shrink: 0;
+}
+.brand .wordmark {
+  font-size: 15px; font-weight: 600;
+  letter-spacing: 0.04em; text-transform: uppercase;
+}
+
+/* Architecture strip — small, refined, thin connectors */
+.arch {
+  display: flex; align-items: center; justify-content: center;
+  gap: 10px; overflow: hidden; min-width: 0; flex-wrap: nowrap;
+}
+.arch-node {
+  display: inline-flex; align-items: center; gap: 6px;
+  font-size: 11px; letter-spacing: 0.08em; text-transform: uppercase;
+  color: var(--text-tertiary);
+  white-space: nowrap;
+  transition: color 160ms ease;
+}
+.arch-node .arch-dot {
+  width: 5px; height: 5px; border-radius: 50%;
+  background: var(--text-tertiary);
+  transition: background 160ms ease;
+}
+.arch-node.active { color: var(--accent); }
+.arch-node.active .arch-dot { background: var(--accent); }
+.arch-node.running { color: var(--status-running); }
+.arch-node.running .arch-dot {
+  background: var(--status-running);
+  animation: dot-pulse 1.5s ease-in-out infinite;
+}
+.arch-arrow {
+  width: 18px; height: 1px;
+  background: var(--border);
+  position: relative; flex-shrink: 0;
+}
+.arch-arrow::after {
+  content: ""; position: absolute; right: 0; top: 50%;
+  width: 4px; height: 4px;
+  border-top: 1px solid var(--border);
+  border-right: 1px solid var(--border);
+  transform: translate(1px, -50%) rotate(45deg);
+}
+
+.topbar-right { display: flex; align-items: center; gap: 16px; }
+
+/* Connection status — just a dot + label */
+.conn-pill {
+  display: inline-flex; align-items: center; gap: 8px;
+  font-size: 12px; color: var(--text-secondary);
+  font-family: var(--font-ui);
+}
+.conn-pill .dot {
+  width: 6px; height: 6px; border-radius: 50%;
+  background: var(--status-failed);
+}
+.conn-pill.ok .dot      { background: var(--accent); }
+.conn-pill.pending .dot { background: var(--status-running); animation: dot-pulse 1.5s ease-in-out infinite; }
+
+/* Secondary button (the trigger) — subtle */
+.trigger-wrap { position: relative; }
+.btn {
+  appearance: none;
+  background: var(--surface);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: var(--r-pill);
+  padding: 6px 12px;
+  font-family: inherit; font-size: 12px; font-weight: 500;
+  letter-spacing: 0.01em;
+  cursor: pointer;
+  display: inline-flex; align-items: center; gap: 8px;
+  transition: background 120ms ease, border-color 120ms ease, color 120ms ease;
+}
+.btn:hover  { background: var(--surface-hover); border-color: var(--border-strong); }
+.btn:focus-visible { outline: none; border-color: var(--text-tertiary); }
+.btn:disabled { opacity: 0.5; cursor: not-allowed; }
+.btn .caret {
+  display: inline-block; width: 7px; height: 7px;
+  border-right: 1px solid currentColor;
+  border-bottom: 1px solid currentColor;
+  transform: translateY(-2px) rotate(45deg);
+  opacity: 0.55;
+}
+
+.trigger-menu {
+  position: absolute; right: 0; top: calc(100% + 6px);
+  min-width: 240px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 4px;
+  display: none;
+  z-index: 40;
+  box-shadow: 0 8px 24px rgba(0,0,0,0.5);
+}
+.trigger-menu.open { display: block; animation: fade-in 140ms ease-out; }
+.trigger-menu .item {
+  display: flex; flex-direction: column; gap: 2px;
+  padding: 8px 10px;
+  border-radius: 5px;
+  cursor: pointer;
+  transition: background 100ms ease;
+}
+.trigger-menu .item:hover { background: var(--surface-hover); }
+.trigger-menu .item .label {
+  font-size: 12px; font-weight: 500; color: var(--text);
+  font-family: var(--font-mono);
+}
+.trigger-menu .item .desc {
+  font-size: 11px; color: var(--text-tertiary);
+}
+
+/* ============================================================
+   METRICS ROW — 4 clean cards
+   ============================================================ */
+.metrics {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+  padding: 20px 24px 0 24px;
+}
+.metric {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--r-metric);
+  padding: 16px 20px;
+  box-shadow: var(--shadow-card);
+  transition: border-color 120ms ease;
+  min-width: 0;
+}
+.metric:hover { border-color: var(--border-strong); }
+.metric .label {
+  font-size: 11px; font-weight: 600;
+  letter-spacing: 0.08em; text-transform: uppercase;
+  color: var(--text-tertiary);
+  margin-bottom: 10px;
+}
+.metric .value {
+  font-size: 28px; font-weight: 600;
+  letter-spacing: -0.02em;
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+  line-height: 1.1;
+  transition: opacity 200ms ease;
+}
+.metric.bump .value { opacity: 0.78; }
+
+/* ============================================================
+   MAIN GRID — left ≈ 68%, right ≈ 32% sticky
+   ============================================================ */
+main {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 320px;
+  gap: 12px;
+  padding: 12px 24px 24px 24px;
+}
+
+.col-main { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+.col-side { position: sticky; top: 72px; align-self: start; min-width: 0; }
+
+@media (max-width: 1100px) {
+  .topbar {
+    grid-template-columns: minmax(0, auto) minmax(0, auto);
+    height: auto;
+    padding: 12px 16px;
+    gap: 12px;
+  }
+  .arch {
+    grid-column: 1 / -1; order: 3;
+    justify-content: flex-start; overflow-x: auto;
+    padding-bottom: 2px;
+  }
+  .metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); padding: 16px 16px 0; }
+  main { grid-template-columns: 1fr; padding: 8px 16px 16px; }
+  .col-side { position: static; }
+}
+@media (max-width: 640px) {
+  .topbar-right { gap: 10px; }
+  .brand .wordmark { font-size: 13px; }
+}
+
+/* ============================================================
+   CARDS — surface + 1px subtle border. No glow.
+   ============================================================ */
+.card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--r-card);
+  padding: 20px;
+  box-shadow: var(--shadow-card);
+  transition: border-color 120ms ease;
+}
+.card:hover { border-color: var(--border-strong); }
+#incident-card.has-incident { border-color: var(--border-strong); }
+.card-header {
+  display: flex; align-items: center; gap: 8px;
+  margin-bottom: 14px;
+}
+.card-header .h-label {
+  font-size: 11px; font-weight: 600;
+  letter-spacing: 0.08em; text-transform: uppercase;
+  color: var(--text-tertiary);
+}
+.card-header .h-aux {
+  margin-left: auto;
+  font-size: 11px; color: var(--text-tertiary);
+}
+
+/* ============================================================
+   CURRENT INCIDENT
+   ============================================================ */
+.inc-id {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-tertiary);
+  letter-spacing: 0.02em;
+}
+.inc-headline {
+  display: flex; flex-wrap: wrap; align-items: baseline;
+  gap: 8px 10px;
+  margin-top: 8px;
+}
+.inc-headline .exception {
+  color: var(--status-failed);
+  font-family: var(--font-mono);
+  font-weight: 600; font-size: 14px;
+}
+.inc-headline .inc-msg {
+  color: var(--text);
+  font-size: 15px; font-weight: 500;
+  letter-spacing: -0.005em;
+  word-break: break-word;
+}
+.inc-endpoint {
+  margin-top: 12px;
+  display: inline-flex; align-items: center;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--text-secondary);
+  background: var(--surface-inset);
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  padding: 3px 8px;
+}
+.badges {
+  display: flex; flex-wrap: wrap; gap: 6px;
+  margin-top: 14px;
+}
+.badge {
+  display: inline-flex; align-items: center; gap: 5px;
+  padding: 2px 8px;
+  border-radius: var(--r-pill);
+  font-size: 11px; font-weight: 500;
+  letter-spacing: 0.01em;
+  font-family: var(--font-mono);
+  background: rgba(155,157,163,0.08);
+  color: var(--text-secondary);
+  border: 1px solid transparent;
+}
+.badge .b-dot { width: 5px; height: 5px; border-radius: 50%; background: currentColor; }
+
+.badge.status-received      { color: var(--text-secondary); background: rgba(155,157,163,0.08); }
+.badge.status-classified    { color: var(--status-info);   background: rgba(94,158,255,0.10); }
+.badge.status-investigating { color: var(--status-running); background: rgba(224,169,61,0.10); }
+.badge.status-fixing        { color: var(--status-running); background: rgba(224,169,61,0.10); }
+.badge.status-verifying     { color: var(--status-running); background: rgba(224,169,61,0.10); }
+.badge.status-verified      { color: var(--accent);         background: rgba(61,214,140,0.10); }
+.badge.status-released      { color: var(--accent);         background: rgba(61,214,140,0.10); }
+.badge.status-escalated     { color: var(--status-escalated); background: rgba(217,144,75,0.10); }
+.badge.status-failed        { color: var(--status-failed);  background: rgba(229,72,77,0.10); }
+
+.badge.sev-P0 { color: var(--status-failed); background: rgba(229,72,77,0.10); }
+.badge.sev-P1 { color: var(--status-escalated); background: rgba(217,144,75,0.10); }
+.badge.sev-P2 { color: var(--status-running); background: rgba(224,169,61,0.10); }
+.badge.cls    { color: var(--text-secondary); background: rgba(155,157,163,0.08); }
+
+/* Outbound-scrubber audit line. Secondary text color, small, no
+   alarm styling — this is a confirmation that the safety feature
+   worked, not a warning. */
+.inc-scrub {
+  margin-top: 12px;
+  font-size: 11.5px;
+  color: var(--text-tertiary);
+  font-family: var(--font-mono);
+  letter-spacing: 0.01em;
+}
+
+.inc-actions {
+  display: flex; flex-wrap: wrap; align-items: center;
+  gap: 12px;
+  margin-top: 20px;
+}
+.pr-button {
+  display: inline-flex; align-items: center; gap: 6px;
+  background: var(--accent);
+  color: var(--accent-fg) !important;
+  border: 1px solid var(--accent);
+  border-radius: var(--r-pill);
+  padding: 7px 14px;
+  font-weight: 600; font-size: 12.5px;
+  letter-spacing: 0.005em;
+  transition: background 120ms ease, border-color 120ms ease;
+}
+.pr-button:hover {
+  background: var(--accent-hover);
+  border-color: var(--accent-hover);
+  text-decoration: none;
+}
+.pr-button .arrow { font-family: var(--font-mono); opacity: 0.75; }
+.omium-link {
+  display: inline-flex; align-items: center; gap: 4px;
+  color: var(--text-secondary) !important;
+  font-size: 12.5px;
+}
+.omium-link:hover { color: var(--text) !important; text-decoration: none; }
+.omium-link .arrow { opacity: 0.7; }
+
+.elapsed {
+  margin-left: auto;
+  color: var(--text-tertiary);
+  font-family: var(--font-mono); font-size: 12.5px;
+  font-variant-numeric: tabular-nums;
+}
+.elapsed .v { color: var(--text-secondary); }
+
+/* Empty state — calm */
+.empty-state {
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 8px; padding: 36px 16px;
+  text-align: center;
+}
+.empty-state .glyph {
+  width: 28px; height: 28px; border-radius: 50%;
+  border: 1px solid var(--border-strong);
+  margin-bottom: 4px;
+}
+.empty-state .msg  { font-size: 13px; color: var(--text-secondary); }
+.empty-state .hint { font-size: 12px; color: var(--text-tertiary); }
+
+/* ============================================================
+   AGENT PIPELINE — thin 1px rail with node dots
+   ============================================================ */
+.pipeline-wrap { position: relative; padding-left: 0; }
+.pipeline-wrap .rail {
+  position: absolute;
+  left: 11px; top: 12px; bottom: 12px;
+  width: 1px;
+  background: var(--border);
+  overflow: hidden;
+}
+.pipeline-wrap .rail .fill {
+  position: absolute; left: 0; top: 0; right: 0;
+  height: 0%;
+  background: var(--accent);
+  transition: height 380ms cubic-bezier(.4, 0, .2, 1);
+  opacity: 0.55;
+}
+#pipeline { display: flex; flex-direction: column; }
+
+.agent {
+  display: grid;
+  grid-template-columns: 24px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 8px 8px 0;
+  border-radius: 6px;
+  position: relative;
+  transition: background 160ms ease;
+}
+.agent.child { padding-left: 26px; }
+.agent .agent-dot {
+  width: 9px; height: 9px; border-radius: 50%;
+  margin-left: 7px;
+  background: var(--bg);
+  border: 1px solid var(--text-tertiary);
+  position: relative; z-index: 1;
+  transition: background 160ms ease, border-color 160ms ease;
+}
+.agent.idle    .agent-dot { background: var(--bg); border-color: var(--text-tertiary); }
+.agent.running { background: var(--surface-hover); }
+.agent.running .agent-dot {
+  background: var(--status-running);
+  border-color: var(--status-running);
+  animation: dot-pulse 1.5s ease-in-out infinite;
+}
+.agent.success .agent-dot {
+  background: var(--accent);
+  border-color: var(--accent);
+  animation: dot-pop 200ms ease-out;
+}
+.agent.error   .agent-dot {
+  background: var(--status-failed);
+  border-color: var(--status-failed);
+}
+
+.agent .name-col {
+  display: flex; flex-direction: column; gap: 2px;
+  min-width: 0;
+}
+.agent .name {
+  font-size: 13px; color: var(--text); font-weight: 500;
+  letter-spacing: -0.005em;
+}
+.agent .status {
+  font-size: 12px; color: var(--text-secondary);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  font-family: var(--font-ui);
+}
+.agent.idle   .name   { color: var(--text-tertiary); font-weight: 400; }
+.agent.idle   .status { color: var(--text-tertiary); }
+.agent.error  .status { color: var(--status-failed); }
+.agent .dur {
+  color: var(--text-tertiary);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+.agent.running .dur { color: var(--status-running); }
+
+.agent.winner .name { color: var(--accent); }
+.agent.loser        { opacity: 0.55; }
+.agent.loser .name  { color: var(--text-tertiary); }
+.winner-tag {
+  display: inline-block; margin-left: 8px;
+  font-size: 10px; font-weight: 600;
+  letter-spacing: 0.10em; text-transform: uppercase;
+  color: var(--accent);
+  vertical-align: 1px;
+}
+
+.agent.flash-success { animation: flash-success 600ms ease-out; }
+.agent.flash-error   { animation: flash-error 600ms ease-out; }
+
+/* ============================================================
+   LIVE THOUGHTS — terminal-style, refined
+   ============================================================ */
+.live-indicator {
+  display: inline-flex; align-items: center; gap: 6px;
+  font-size: 11px; color: var(--text-tertiary);
+  letter-spacing: 0.02em;
+}
+.live-indicator .live-dot {
+  width: 6px; height: 6px; border-radius: 50%;
+  background: var(--text-tertiary);
+}
+.live-indicator.on { color: var(--text-secondary); }
+.live-indicator.on .live-dot {
+  background: var(--accent);
+  animation: dot-pulse 1.5s ease-in-out infinite;
+}
+
+.thoughts-wrap {
+  position: relative;
+  background: var(--surface-inset);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  overflow: hidden;
+}
+.thoughts-wrap::before {
+  content: ""; position: absolute;
+  left: 0; right: 0; top: 0; height: 28px;
+  background: linear-gradient(to bottom, var(--surface-inset) 0%, rgba(14,15,17,0) 100%);
+  pointer-events: none; z-index: 2;
+}
+.thoughts {
+  height: 320px;
+  overflow-y: auto;
+  padding: 14px 16px;
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+  line-height: 1.7;
+  scrollbar-width: thin;
+  scrollbar-color: #2a2b30 transparent;
+}
+.thoughts::-webkit-scrollbar       { width: 8px; }
+.thoughts::-webkit-scrollbar-thumb { background: #2a2b30; border-radius: 4px; }
+.thoughts::-webkit-scrollbar-track { background: transparent; }
+
+.thoughts .line {
+  white-space: pre-wrap; word-break: break-word;
+  color: var(--text-secondary);
+  padding: 0;
+  animation: log-in 180ms ease-out;
+}
+.thoughts .ts { color: var(--text-tertiary); margin-right: 10px; }
+.thoughts .ev { margin-right: 10px; font-weight: 500; color: var(--text-secondary); }
+.thoughts a   { color: var(--accent); text-decoration: underline; text-underline-offset: 2px; }
+.thoughts b   { color: var(--text); font-weight: 600; }
+.thoughts .inc-id {
+  font-family: var(--font-mono);
+  color: var(--text-tertiary);
+  font-size: 12px;
+  background: none; padding: 0;
+}
+
+/* Event-type word colors only — muted palette */
+.ev-green        { color: var(--status-success); }
+.ev-yellow       { color: var(--status-running); }
+.ev-red          { color: var(--status-failed); }
+.ev-blue         { color: var(--status-info); }
+.ev-muted        { color: var(--text-tertiary); }
+.ev-purple       { color: var(--text-secondary); }
+.ev-cyan         { color: var(--status-info); }
+.ev-magenta      { color: var(--status-running); }
+.ev-bright-green { color: var(--accent); font-weight: 600; }
+
+/* ============================================================
+   RECENT INCIDENTS (sidebar)
+   ============================================================ */
+.recent-list { display: flex; flex-direction: column; gap: 2px; }
+.recent-item {
+  display: grid;
+  grid-template-columns: minmax(0,1fr) auto;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  border-radius: 6px;
+  cursor: pointer;
+  border-left: 2px solid transparent;
+  transition: background 120ms ease, border-color 120ms ease;
+}
+.recent-item:hover { background: var(--surface-hover); }
+.recent-item.active {
+  background: rgba(61,214,140,0.05);
+  border-left-color: var(--accent);
+}
+.recent-item .ri-id {
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  color: var(--text-secondary);
+}
+.recent-item .ri-meta {
+  font-size: 11px; color: var(--text-tertiary);
+  margin-top: 3px;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.recent-item .ri-cls { color: var(--text-tertiary); }
+
+.empty-list {
+  color: var(--text-tertiary);
+  font-size: 12px;
+  padding: 8px 12px;
+  display: block;
+}
+
+/* ============================================================
+   ANIMATIONS — subtle, ease-out, no bounce
+   ============================================================ */
+@keyframes dot-pulse {
+  0%, 100% { opacity: 1; }
+  50%      { opacity: 0.4; }
+}
+@keyframes dot-pop {
+  0%   { transform: scale(0.85); }
+  100% { transform: scale(1); }
+}
+@keyframes fade-in {
+  from { opacity: 0; transform: translateY(-2px); }
+  to   { opacity: 1; transform: none; }
+}
+@keyframes log-in {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+@keyframes flash-success {
+  0%   { background: rgba(61,214,140,0.10); }
+  100% { background: transparent; }
+}
+@keyframes flash-error {
+  0%   { background: rgba(229,72,77,0.10); }
+  100% { background: transparent; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+</style>
+</head>
+<body>
+
+<!-- =====================================================================
+     TOP BAR
+     ===================================================================== -->
+<header class="topbar">
+  <div class="brand">
+    <span class="mark" aria-hidden="true">
+      <svg viewBox="0 0 20 20" width="18" height="18">
+        <path d="M10 1.5 L18.5 10 L10 18.5 L1.5 10 Z" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/>
+        <circle cx="10" cy="10" r="2.6" fill="currentColor"/>
+      </svg>
+    </span>
+    <span class="wordmark">Autonomous SRE</span>
+  </div>
+
+  <nav class="arch" id="arch-strip" aria-label="pipeline architecture"></nav>
+
+  <div class="topbar-right">
+    <span id="conn-pill" class="conn-pill pending">
+      <span class="dot"></span><span id="conn-text">connecting…</span>
+    </span>
+    <div class="trigger-wrap">
+      <button class="btn" id="trigger-btn" aria-haspopup="menu">
+        <span>Trigger Incident</span><span class="caret" aria-hidden="true"></span>
+      </button>
+      <div class="trigger-menu" id="trigger-menu" role="menu">
+        <div class="item" data-bug="null_deref">
+          <span class="label">null_deref</span>
+          <span class="desc">None value crash · POST /shorten</span>
+        </div>
+        <div class="item" data-bug="regression">
+          <span class="label">regression</span>
+          <span class="desc">Recent commit broke a contract</span>
+        </div>
+        <div class="item" data-bug="config_error">
+          <span class="label">config_error</span>
+          <span class="desc">Missing environment variable on boot</span>
+        </div>
+        <div class="item" data-bug="unknown">
+          <span class="label">unknown</span>
+          <span class="desc">Unclassifiable · escalation demo</span>
+        </div>
+      </div>
+    </div>
+  </div>
+</header>
+
+<!-- =====================================================================
+     METRICS — four clean cards
+     ===================================================================== -->
+<div class="metrics" id="metrics-row">
+  <div class="metric" data-metric="total">
+    <div class="label">Incidents Handled</div>
+    <div class="value" data-target="0">0</div>
+  </div>
+  <div class="metric" data-metric="rate">
+    <div class="label">Success Rate</div>
+    <div class="value" data-target="0">0%</div>
+  </div>
+  <div class="metric" data-metric="avg">
+    <div class="label">Avg Resolution</div>
+    <div class="value" data-target="0">0s</div>
+  </div>
+  <div class="metric" data-metric="prs">
+    <div class="label">PRs Shipped</div>
+    <div class="value" data-target="0">0</div>
+  </div>
+</div>
+
+<!-- =====================================================================
+     MAIN — incident · pipeline · live log · recent sidebar
+     ===================================================================== -->
+<main>
+  <div class="col-main">
+    <section class="card" id="incident-card">
+      <div class="card-header">
+        <div class="h-label">Current Incident</div>
+        <div class="h-aux" id="incident-aux"></div>
+      </div>
+      <div id="incident-body">
+        <div class="empty-state">
+          <div class="glyph"></div>
+          <div class="msg">Awaiting incidents — system idle</div>
+          <div class="hint">Trigger a test incident or wait for a real alert.</div>
+        </div>
+      </div>
+    </section>
+
+    <section class="card">
+      <div class="card-header">
+        <div class="h-label">Agent Pipeline</div>
+      </div>
+      <div class="pipeline-wrap" id="pipeline-wrap">
+        <div class="rail"><div class="fill" id="rail-fill"></div></div>
+        <div id="pipeline"></div>
+      </div>
+    </section>
+
+    <section class="card">
+      <div class="card-header">
+        <div class="h-label">Live Thoughts</div>
+        <div class="h-aux">
+          <span class="live-indicator" id="live-ind"><span class="live-dot"></span>Live</span>
+        </div>
+      </div>
+      <div class="thoughts-wrap">
+        <div class="thoughts" id="thoughts"></div>
+      </div>
+    </section>
+  </div>
+
+  <aside class="col-side">
+    <section class="card">
+      <div class="card-header">
+        <div class="h-label">Recent Incidents</div>
+      </div>
+      <div class="recent-list" id="sidebar">
+        <span class="empty-list">No incidents yet</span>
+      </div>
+    </section>
+  </aside>
+</main>
+
+<script>
+"use strict";
+
+/* =====================================================================
+   Constants — kept identical to the original wire protocol
+   ===================================================================== */
+
+// Vertical pipeline rail. parent rows render always; child rows render
+// only after the fix race kicks off (state.raceExpanded === true).
+const PIPELINE_STAGES = [
+  { key:"triager",                label:"Triager" },
+  { key:"investigator",           label:"Investigator" },
+  { key:"fix_race",               label:"Fix Race", parent:true },
+  { key:"fix_author_defensive",   label:"Defensive draft",   child:true, strategy:"defensive" },
+  { key:"fix_author_permissive",  label:"Permissive draft",  child:true, strategy:"permissive" },
+  { key:"verifier_defensive",     label:"Verify · defensive",  child:true, strategy:"defensive" },
+  { key:"verifier_permissive",    label:"Verify · permissive", child:true, strategy:"permissive" },
+  { key:"releaser",               label:"Releaser" },
+];
+
+// Horizontal architecture-strip nodes (the legend at the top).
+const ARCH_NODES = [
+  { key:"webhook",       label:"Webhook" },
+  { key:"triager",       label:"Triager" },
+  { key:"investigator",  label:"Investigator" },
+  { key:"fix_race",      label:"Fix Race" },
+  { key:"verifier",      label:"Verifier" },
+  { key:"releaser",      label:"Releaser" },
+];
+
+// Color buckets for the Live Thoughts panel — one per event family.
+// pr_opened gets the accent so the moneymaker line is unmissable.
+const EVENT_COLORS = {
+  incident_received:"ev-blue", workflow_started:"ev-blue", workflow_finished:"ev-blue",
+  agent_started:"ev-yellow", agent_progress:"ev-yellow",
+  status_changed:"ev-blue", incident_classified:"ev-blue",
+  race_started:"ev-magenta", race_candidate_drafted:"ev-magenta",
+  race_candidate_verified:"ev-magenta", race_won:"ev-magenta",
+  pr_opened:"ev-bright-green",
+  slack_posted:"ev-cyan",
+  hello:"ev-muted", ping:"ev-muted",
+  // agent_finished is colored dynamically based on payload.status.
+};
+
+// Statuses that mean "the pipeline has stopped" — used to freeze the
+// elapsed-time counter and update the document title.
+const TERMINAL_STATUSES = new Set([
+  "released","release_failed","escalated",
+  "investigation_failed","fix_failed","fix_rejected","verification_failed",
+]);
+
+const SEV_CLASS = { P0:"sev-P0", P1:"sev-P1", P2:"sev-P2" };
+
+// Map a raw incident.status to the simplified bucket the badge CSS
+// expects (e.g. "fix_failed" → "failed").
+function statusBadgeKind(s) {
+  if (!s) return "received";
+  if (s === "released") return "released";
+  if (s === "verified") return "verified";
+  if (s === "escalated") return "escalated";
+  if (s === "received") return "received";
+  if (s === "classified") return "classified";
+  if (s === "investigating") return "investigating";
+  if (s === "fixing" || s === "pending_implementation") return "fixing";
+  if (s === "verifying") return "verifying";
+  if (s.endsWith("_failed") || s === "fix_rejected") return "failed";
+  return "classified";
+}
+
+/* =====================================================================
+   State
+   ===================================================================== */
+
+const state = {
+  current:null,
+  agents:{},
+  raceExpanded:false,
+  winner:null,
+  omiumProject:null,
+  recent:[],
+  liveTimer:null,
+  reconnectDelay:2000,
+  evtSource:null,
+  metrics:null,
+  metricsAnims:{},
+  startedAt:null,
+  liveActive:false,
+  liveTimeout:null,
+  archActive:new Set(),
+  flashedAgents:new Set(),
+};
+
+const $   = id => document.getElementById(id);
+const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;"}[c]));
+const fmtTime = d => { if(!d) return ""; const dt=(typeof d==="string")?new Date(d):d; return dt.toTimeString().slice(0,8); };
+const pad2 = n => (n<10?"0":"") + n;
+function fmtElapsed(ms){
+  const total = Math.max(0, Math.floor(ms/1000));
+  const m = Math.floor(total/60), s = total%60;
+  return m>0 ? `${m}m ${pad2(s)}s` : `${s}s`;
+}
+
+/* =====================================================================
+   Architecture strip — top banner pipeline legend
+   ===================================================================== */
+
+function renderArchStrip() {
+  const root = $("arch-strip");
+  const parts = [];
+  ARCH_NODES.forEach((n, i) => {
+    if (i > 0) parts.push(`<span class="arch-arrow" aria-hidden="true"></span>`);
+    parts.push(
+      `<span class="arch-node" data-key="${esc(n.key)}">
+        <span class="arch-dot"></span><span>${esc(n.label)}</span>
+      </span>`
+    );
+  });
+  root.innerHTML = parts.join("");
+}
+
+function setArchNode(key, mode) {
+  // mode: "running" | "active" | null
+  const el = document.querySelector(`.arch-node[data-key="${key}"]`);
+  if (!el) return;
+  el.classList.remove("running","active");
+  if (mode) el.classList.add(mode);
+}
+
+function resetArchStrip() {
+  state.archActive.clear();
+  ARCH_NODES.forEach(n => setArchNode(n.key, null));
+}
+
+// Map an agent_name to its arch-strip key. Fix race children all flow
+// through the "fix_race" arch node, verifiers through "verifier".
+function archKeyForAgent(name) {
+  if (!name) return null;
+  if (name === "triager") return "triager";
+  if (name === "investigator") return "investigator";
+  if (name.startsWith("fix_author_") || name === "fix_race") return "fix_race";
+  if (name.startsWith("verifier")) return "verifier";
+  if (name === "releaser") return "releaser";
+  return null;
+}
+
+/* =====================================================================
+   Incident card
+   ===================================================================== */
+
+function renderIncident() {
+  const body = $("incident-body");
+  const card = $("incident-card");
+  $("incident-aux").textContent = "";
+
+  if (!state.current) {
+    card.classList.remove("has-incident");
+    body.innerHTML = `
+      <div class="empty-state">
+        <div class="glyph"></div>
+        <div class="msg">Awaiting incidents — system idle</div>
+        <div class="hint">Trigger a test incident or wait for a real alert.</div>
+      </div>`;
+    return;
+  }
+
+  card.classList.add("has-incident");
+  const inc = state.current;
+
+  const sevBadge = inc.severity
+    ? `<span class="badge ${SEV_CLASS[inc.severity]||""}">${esc(inc.severity)}</span>` : "";
+  const clsBadge = inc.classification
+    ? `<span class="badge cls">${esc(inc.classification)}</span>` : "";
+  const statusKind = statusBadgeKind(inc.status);
+  const statusBadge = inc.status
+    ? `<span class="badge status-${statusKind}"><span class="b-dot"></span>${esc(inc.status)}</span>` : "";
+
+  const prHtml = inc.pr_url
+    ? `<a class="pr-button" href="${esc(inc.pr_url)}" target="_blank" rel="noopener">View Pull Request #${esc(inc.pr_number||"?")}<span class="arrow">↗</span></a>` : "";
+  const omiumHtml = state.omiumProject
+    ? `<a class="omium-link" href="https://app.omium.ai/automation?project=${esc(state.omiumProject)}" target="_blank" rel="noopener">Trace on Omium<span class="arrow">→</span></a>` : "";
+
+  const exc  = inc.exception_class ? esc(inc.exception_class) : "";
+  const msg  = inc.exception_message ? esc(inc.exception_message) : "";
+  const endp = inc.endpoint ? esc(inc.endpoint) : "";
+
+  // Outbound-scrubber audit line. The victim app strips PII / secrets
+  // from crash reports before they leave its process; show a small,
+  // understated line so operators (and judges) can see the safety
+  // feature working without it screaming for attention.
+  let redactions = [];
+  if (Array.isArray(inc.redactions)) {
+    redactions = inc.redactions;
+  } else if (typeof inc.redactions === "string" && inc.redactions.length) {
+    try { redactions = JSON.parse(inc.redactions) || []; }
+    catch (_e) { redactions = []; }
+  }
+  const scrubHtml = redactions.length
+    ? `<div class="inc-scrub" title="Sensitive values were redacted by the victim app before being sent to the orchestrator (and the LLM).">🛡 ${redactions.length} sensitive value${redactions.length === 1 ? "" : "s"} redacted before LLM (${redactions.map(esc).join(", ")})</div>`
+    : "";
+
+  body.innerHTML = `
+    <div class="inc-id">${esc(inc.id)}</div>
+    <div class="inc-headline">
+      ${exc ? `<span class="exception">${exc}</span>` : ""}
+      ${msg ? `<span class="inc-msg">${msg}</span>` : ""}
+    </div>
+    ${endp ? `<div><span class="inc-endpoint">${endp}</span></div>` : ""}
+    <div class="badges">
+      ${statusBadge}${sevBadge}${clsBadge}
+    </div>
+    ${scrubHtml}
+    <div class="inc-actions">
+      ${prHtml}${omiumHtml}
+      <span class="elapsed" id="elapsed-counter"></span>
+    </div>`;
+  refreshElapsed();
+}
+
+function refreshElapsed() {
+  const el = $("elapsed-counter");
+  if (!el) return;
+  if (!state.current || !state.startedAt) { el.innerHTML = ""; return; }
+  const ms = (state.endedAt || Date.now()) - state.startedAt;
+  const label = state.endedAt ? "total" : "elapsed";
+  el.innerHTML = `${label} <span class="v">${fmtElapsed(ms)}</span>`;
+}
+
+/* =====================================================================
+   Agent pipeline rail
+   ===================================================================== */
+
+function ensureAgent(key) {
+  if (!state.agents[key]) state.agents[key] = { status:"idle" };
+  return state.agents[key];
+}
+
+function pipelineProgress() {
+  // The rail's accent fill measures workflow progress through the four
+  // main stages: triager → investigator → fix_race → releaser.
+  const main = ["triager","investigator","fix_race","releaser"];
+  let done = 0, running = 0;
+  for (const k of main) {
+    const a = state.agents[k];
+    if (!a) continue;
+    if (a.status === "success") done++;
+    else if (a.status === "running") running++;
+  }
+  return ((done + running*0.5) / main.length) * 100;
+}
+
+function renderPipeline() {
+  const html = PIPELINE_STAGES.map(stage => {
+    if (stage.child && !state.raceExpanded) return "";
+    const a = ensureAgent(stage.key);
+    const isWinner = state.winner && stage.strategy === state.winner && stage.child;
+    const isLoser  = state.winner && stage.child && stage.strategy && stage.strategy !== state.winner;
+
+    const classes = ["agent"];
+    if (stage.child) classes.push("child");
+    classes.push(a.status);
+    if (isWinner) classes.push("winner");
+    if (isLoser)  classes.push("loser");
+
+    let dur = "";
+    if (a.status === "running" && a.started_at) {
+      const elapsed = (Date.now() - new Date(a.started_at).getTime()) / 1000;
+      dur = elapsed.toFixed(1) + "s";
+    } else if (a.duration_s != null) {
+      dur = (typeof a.duration_s === "number" ? a.duration_s : parseFloat(a.duration_s)).toFixed(2) + "s";
+    }
+
+    const winnerTag = isWinner ? ` <span class="winner-tag">Selected</span>` : "";
+    const statusText = a.summary || ({idle:"pending",running:"running…",success:"done",error:"failed"})[a.status];
+
+    return `<div class="${classes.join(" ")}" data-key="${esc(stage.key)}">
+      <span class="agent-dot" aria-hidden="true"></span>
+      <span class="name-col">
+        <span class="name">${esc(stage.label)}${winnerTag}</span>
+        <span class="status" title="${esc(statusText||"")}">${esc(statusText||"")}</span>
+      </span>
+      <span class="dur">${esc(dur)}</span>
+    </div>`;
+  }).join("");
+  $("pipeline").innerHTML = html;
+  $("rail-fill").style.height = pipelineProgress().toFixed(1) + "%";
+}
+
+function flashAgentRow(key, kind) {
+  const el = document.querySelector(`.agent[data-key="${esc(key)}"]`);
+  if (!el) return;
+  const cls = kind === "success" ? "flash-success" : "flash-error";
+  el.classList.remove("flash-success","flash-error");
+  void el.offsetWidth;
+  el.classList.add(cls);
+  setTimeout(() => el.classList.remove(cls), 700);
+}
+
+function startLiveTimer() {
+  if (state.liveTimer) return;
+  state.liveTimer = setInterval(() => {
+    const anyRunning = Object.values(state.agents).some(a => a.status === "running");
+    if (anyRunning) renderPipeline();
+    refreshElapsed();
+  }, 250);
+}
+
+/* =====================================================================
+   Live Thoughts terminal-log panel
+   ===================================================================== */
+
+const MAX_LINES = 200;
+function appendThought(eventType, payload) {
+  const root = $("thoughts");
+  const data = payload.data || {};
+  const msg = summarize(eventType, data);
+  if (!msg) return;
+
+  let color = EVENT_COLORS[eventType] || "ev-muted";
+  if (eventType === "agent_finished") {
+    color = data.status === "success" ? "ev-green" : "ev-red";
+  } else if (eventType === "workflow_finished") {
+    color = (data.final_status === "released") ? "ev-green"
+          : (data.final_status === "escalated" ? "ev-yellow" : "ev-red");
+  }
+
+  const ts = fmtTime(payload.ts || new Date());
+  const line = document.createElement("div");
+  line.className = "line";
+  line.innerHTML = `<span class="ts">${esc(ts)}</span><span class="ev ${color}">${esc(eventType)}</span><span>${msg}</span>`;
+  root.appendChild(line);
+  while (root.children.length > MAX_LINES) root.removeChild(root.firstChild);
+  root.scrollTop = root.scrollHeight;
+  flickerLive();
+}
+
+function flickerLive() {
+  state.liveActive = true;
+  $("live-ind").classList.add("on");
+  if (state.liveTimeout) clearTimeout(state.liveTimeout);
+  state.liveTimeout = setTimeout(() => {
+    state.liveActive = false;
+    $("live-ind").classList.remove("on");
+  }, 4000);
+}
+
+function summarize(t, d) {
+  switch (t) {
+    case "ping": return "";
+    case "hello": return "stream connected";
+    case "incident_received":
+      return `${esc(d.exception_class)} @ ${esc(d.endpoint)} — <span class="inc-id">${esc(d.incident_id)}</span>`;
+    case "workflow_started": return `workflow ${esc(d.workflow_id||"?")} started`;
+    case "workflow_finished":
+      return `final=${esc(d.final_status)} · total=${(d.total_duration_s||0).toFixed(1)}s`;
+    case "agent_started": return `${esc(d.agent_name)} running…`;
+    case "agent_finished":
+      return `${esc(d.agent_name)} → ${esc(d.status)} (${(d.duration_s||0).toFixed(2)}s) ${esc(d.summary||"")}`;
+    case "status_changed": return `${esc(d.old_status)} → <b>${esc(d.new_status)}</b>`;
+    case "race_started": return `racing ${esc((d.strategies||[]).join(", "))}`;
+    case "race_candidate_drafted":
+      return `${esc(d.strategy)} drafted ${d.success?"ok":"failed"} conf=${(d.confidence||0).toFixed(2)}`;
+    case "race_candidate_verified":
+      return `${esc(d.strategy)} verified → ${esc(d.verdict)} (${(d.duration_s||0).toFixed(2)}s)`;
+    case "race_won": return `winner: <b>${esc(d.winning_strategy)}</b> (${esc(d.verdict)})`;
+    case "pr_opened":
+      return `PR <a href="${esc(d.pr_url)}" target="_blank" rel="noopener">#${esc(d.pr_number||"?")} ↗</a> opened`;
+    case "slack_posted": return d.success ? "Slack notified" : "Slack skipped";
+    case "incident_classified":
+      return `class=${esc(d.classification)} sev=${esc(d.severity)} conf=${(d.confidence||0).toFixed(2)}`;
+    default: return esc(JSON.stringify(d));
+  }
+}
+
+/* =====================================================================
+   Sidebar
+   ===================================================================== */
+
+function renderSidebar() {
+  const root = $("sidebar");
+  if (!state.recent.length) {
+    root.innerHTML = '<span class="empty-list">No incidents yet</span>';
+    return;
+  }
+  root.innerHTML = state.recent.slice(0, 10).map(inc => {
+    const active = state.current && state.current.id === inc.id ? " active" : "";
+    const when = (inc.created_at || "").replace("T"," ").slice(5,16);
+    const kind = statusBadgeKind(inc.status);
+    const cls = inc.classification ? esc(inc.classification) : "—";
+    return `<div class="recent-item${active}" data-id="${esc(inc.id)}">
+      <div>
+        <div class="ri-id">${esc(inc.id)}</div>
+        <div class="ri-meta"><span class="ri-cls">${cls}</span> · ${esc(when)}</div>
+      </div>
+      <span class="badge status-${kind}">${esc(inc.status||"?")}</span>
+    </div>`;
+  }).join("");
+  root.querySelectorAll(".recent-item").forEach(el => {
+    el.addEventListener("click", () => {
+      const inc = state.recent.find(i => i.id === el.getAttribute("data-id"));
+      if (inc) loadIncident(inc);
+    });
+  });
+}
+
+/* =====================================================================
+   State helpers
+   ===================================================================== */
+
+function resetAgents() {
+  state.agents = {};
+  state.raceExpanded = false;
+  state.winner = null;
+  state.flashedAgents.clear();
+  PIPELINE_STAGES.forEach(s => state.agents[s.key] = { status:"idle" });
+  resetArchStrip();
+}
+
+function loadIncident(inc) {
+  state.current = inc;
+  state.startedAt = inc.created_at ? new Date(inc.created_at).getTime() : Date.now();
+  state.endedAt = TERMINAL_STATUSES.has(inc.status) ? Date.now() : null;
+  resetAgents();
+
+  (inc.agent_runs || []).forEach(r => {
+    const a = ensureAgent(r.agent_name);
+    a.status = r.status === "success" ? "success" : r.status === "error" ? "error" : "running";
+    a.started_at = r.started_at;
+    if (r.finished_at) a.duration_s = (new Date(r.finished_at) - new Date(r.started_at)) / 1000;
+    a.summary = r.output_summary ? r.output_summary.slice(0, 80) : "";
+    if (r.agent_name.startsWith("fix_author_") || r.agent_name.startsWith("verifier_")) state.raceExpanded = true;
+    const ak = archKeyForAgent(r.agent_name);
+    if (ak && a.status === "success") setArchNode(ak, "active");
+  });
+
+  renderIncident(); renderPipeline(); renderSidebar(); updateTitle();
+}
+
+/* =====================================================================
+   SSE event dispatch — UNCHANGED LOGIC
+   ===================================================================== */
+
+function handleEvent(eventType, payload) {
+  appendThought(eventType, payload);
+  const d = payload.data || {};
+
+  if (eventType === "incident_received") {
+    state.current = {
+      id:d.incident_id, exception_class:d.exception_class, exception_message:d.exception_message,
+      endpoint:d.endpoint, source_service:d.source_service, status:"received", agent_runs:[],
+      created_at: payload.ts || new Date().toISOString(),
+    };
+    state.startedAt = Date.now();
+    state.endedAt = null;
+    resetAgents();
+    setArchNode("webhook","active");
+    renderIncident(); renderPipeline(); updateTitle();
+    refreshMetrics();
+    return;
+  }
+
+  // Drop events for other incidents — only render the focused one.
+  if (!state.current || (d.incident_id && d.incident_id !== state.current.id)) return;
+
+  if (eventType === "status_changed") {
+    state.current.status = d.new_status;
+    if (TERMINAL_STATUSES.has(d.new_status)) state.endedAt = Date.now();
+    renderIncident(); updateTitle();
+  } else if (eventType === "incident_classified") {
+    state.current.classification = d.classification;
+    state.current.severity = d.severity;
+    renderIncident();
+  } else if (eventType === "agent_started") {
+    const a = ensureAgent(d.agent_name);
+    a.status = "running"; a.started_at = d.started_at || new Date().toISOString();
+    a.duration_s = null; a.summary = "";
+    const ak = archKeyForAgent(d.agent_name);
+    if (ak) setArchNode(ak, "running");
+    renderPipeline(); startLiveTimer();
+  } else if (eventType === "agent_finished") {
+    const a = ensureAgent(d.agent_name);
+    a.status = d.status === "success" ? "success" : "error";
+    a.duration_s = d.duration_s; a.summary = d.summary;
+    renderPipeline();
+    const flashKey = `${d.agent_name}:${a.duration_s||0}`;
+    if (!state.flashedAgents.has(flashKey)) {
+      state.flashedAgents.add(flashKey);
+      flashAgentRow(d.agent_name, a.status);
+    }
+    const ak = archKeyForAgent(d.agent_name);
+    if (ak && a.status === "success") setArchNode(ak, "active");
+  } else if (eventType === "race_started") {
+    state.raceExpanded = true;
+    (d.strategies || []).forEach(s => {
+      const fa = ensureAgent("fix_author_" + s);
+      fa.status = "running"; fa.started_at = new Date().toISOString();
+    });
+    const r = ensureAgent("fix_race"); r.status = "running"; r.summary = "drafting in parallel";
+    setArchNode("fix_race","running");
+    renderPipeline(); startLiveTimer();
+  } else if (eventType === "race_candidate_drafted") {
+    const a = ensureAgent("fix_author_" + d.strategy);
+    a.status = d.success ? "success" : "error";
+    a.summary = d.success
+      ? `conf=${(d.confidence||0).toFixed(2)} risk=${d.risk_level||"?"}`
+      : (d.error||"draft failed").slice(0, 50);
+    if (d.success) {
+      const v = ensureAgent("verifier_" + d.strategy);
+      v.status = "running"; v.started_at = new Date().toISOString();
+    }
+    renderPipeline();
+  } else if (eventType === "race_candidate_verified") {
+    const v = ensureAgent("verifier_" + d.strategy);
+    v.status = d.verdict === "verified" ? "success" : "error";
+    v.duration_s = d.duration_s;
+    v.summary = `${d.verdict}${d.tests_passed ? " · tests passed" : ""}`;
+    renderPipeline();
+  } else if (eventType === "race_won") {
+    state.winner = d.winning_strategy;
+    const race = ensureAgent("fix_race");
+    race.status = d.verdict === "verified" ? "success" : "error";
+    race.summary = `winner: ${d.winning_strategy} (${d.verdict})`;
+    if (race.status === "success") setArchNode("fix_race","active");
+    renderPipeline();
+  } else if (eventType === "pr_opened") {
+    state.current.pr_url = d.pr_url; state.current.pr_number = d.pr_number;
+    renderIncident();
+    refreshMetrics();
+  } else if (eventType === "workflow_finished") {
+    state.current.status = d.final_status;
+    state.endedAt = Date.now();
+    renderIncident(); refreshRecent(); refreshMetrics(); updateTitle();
+  }
+}
+
+/* =====================================================================
+   Document title — judges notice the tab change
+   ===================================================================== */
+
+function updateTitle() {
+  const inc = state.current;
+  if (!inc) { document.title = "Autonomous SRE"; return; }
+  if (inc.status === "released")        document.title = "• Resolved — Autonomous SRE";
+  else if (inc.status === "escalated")  document.title = "• Escalated — Autonomous SRE";
+  else if (inc.status && (inc.status.endsWith("_failed") || inc.status === "fix_rejected"))
+    document.title = "• Failed — Autonomous SRE";
+  else document.title = "• Investigating — Autonomous SRE";
+}
+
+/* =====================================================================
+   Connection
+   ===================================================================== */
+
+function setConn(cls, label) {
+  $("conn-pill").className = "conn-pill " + cls;
+  $("conn-text").textContent = label;
+}
+
+function connect() {
+  if (state.evtSource) { try { state.evtSource.close(); } catch (_) {} }
+  setConn("pending", "connecting…");
+  const es = new EventSource("/events/stream");
+  state.evtSource = es;
+  es.addEventListener("hello", e => {
+    setConn("ok", "Connected"); state.reconnectDelay = 2000;
+    try { handleEvent("hello", JSON.parse(e.data)); } catch (_) {}
+  });
+  ["incident_received","workflow_started","workflow_finished","agent_started","agent_finished",
+   "agent_progress","status_changed","race_started","race_candidate_drafted","race_candidate_verified",
+   "race_won","pr_opened","slack_posted","incident_classified"].forEach(t => {
+    es.addEventListener(t, e => {
+      try { handleEvent(t, JSON.parse(e.data)); } catch (err) { console.error(t, err); }
+    });
+  });
+  es.addEventListener("ping", () => {});
+  es.onerror = () => {
+    setConn("", "reconnecting…");
+    try { es.close(); } catch (_) {}
+    setTimeout(connect, state.reconnectDelay);
+    state.reconnectDelay = Math.min(state.reconnectDelay * 1.5, 15000);
+  };
+}
+
+/* =====================================================================
+   REST helpers
+   ===================================================================== */
+
+async function refreshRecent() {
+  try {
+    const r = await fetch("/api/incidents/recent?limit=10");
+    if (!r.ok) return;
+    const j = await r.json();
+    state.recent = j.incidents || [];
+    state.omiumProject = j.omium_project || null;
+    if (state.recent.length && !state.current) loadIncident(state.recent[0]);
+    renderSidebar(); renderIncident();
+  } catch (e) { console.warn("refreshRecent failed", e); }
+}
+
+async function refreshMetrics() {
+  try {
+    const r = await fetch("/api/metrics");
+    if (!r.ok) return;
+    const m = await r.json();
+    state.metrics = m;
+    paintMetrics(m);
+  } catch (e) { console.warn("metrics failed", e); }
+}
+
+function paintMetrics(m) {
+  setMetric("total", m.total_incidents,         v => Math.round(v).toString());
+  setMetric("rate",  m.success_rate * 100,      v => Math.round(v) + "%");
+  setMetric("avg",   m.avg_resolution_seconds,  v => Math.round(v) + "s");
+  setMetric("prs",   m.total_prs_opened,        v => Math.round(v).toString());
+  // 'esc' element was intentionally removed from the layout; setMetric
+  // safely no-ops if the card is missing.
+  setMetric("esc",   m.escalated_count,         v => Math.round(v).toString());
+}
+
+// Tween a metric to its new target. Subtle: 300ms ease-out, no bounce.
+function setMetric(name, target, fmt) {
+  const el = document.querySelector(`.metric[data-metric="${name}"]`);
+  if (!el) return;
+  const valEl = el.querySelector(".value");
+  const current = parseFloat(valEl.getAttribute("data-target") || "0");
+  if (Math.abs(current - target) < 0.001) {
+    valEl.textContent = fmt(target);
+    return;
+  }
+  valEl.setAttribute("data-target", String(target));
+  el.classList.add("bump");
+  setTimeout(() => el.classList.remove("bump"), 320);
+
+  const start = current, end = target, t0 = performance.now(), dur = 300;
+  const prev = state.metricsAnims[name];
+  if (prev) cancelAnimationFrame(prev);
+  const step = now => {
+    const k = Math.min(1, (now - t0) / dur);
+    const eased = 1 - Math.pow(1 - k, 3); // ease-out cubic
+    valEl.textContent = fmt(start + (end - start) * eased);
+    if (k < 1) state.metricsAnims[name] = requestAnimationFrame(step);
+  };
+  state.metricsAnims[name] = requestAnimationFrame(step);
+}
+
+/* =====================================================================
+   Trigger dropdown wire-up
+   ===================================================================== */
+
+const TRIGGER_BTN_HTML = '<span>Trigger Incident</span><span class="caret" aria-hidden="true"></span>';
+
+function fireBug(bug) {
+  const btn = $("trigger-btn");
+  btn.disabled = true;
+  btn.textContent = `Triggering ${bug}…`;
+  const url = "/api/test/trigger" + (bug ? `?bug=${encodeURIComponent(bug)}` : "");
+  fetch(url, { method:"POST" })
+    .catch(e => console.warn("trigger failed", e))
+    .finally(() => {
+      setTimeout(() => {
+        btn.disabled = false;
+        btn.innerHTML = TRIGGER_BTN_HTML;
+      }, 1200);
+    });
+}
+
+function wireTrigger() {
+  const btn = $("trigger-btn");
+  const menu = $("trigger-menu");
+  btn.addEventListener("click", e => {
+    e.stopPropagation();
+    menu.classList.toggle("open");
+  });
+  menu.querySelectorAll(".item").forEach(el => {
+    el.addEventListener("click", () => {
+      menu.classList.remove("open");
+      fireBug(el.getAttribute("data-bug"));
+    });
+  });
+  document.addEventListener("click", e => {
+    if (!menu.contains(e.target) && e.target !== btn) menu.classList.remove("open");
+  });
+  document.addEventListener("keydown", e => {
+    if (e.key === "Escape") menu.classList.remove("open");
+  });
+}
+
+/* =====================================================================
+   Boot
+   ===================================================================== */
+
+renderArchStrip();
+resetAgents();
+renderPipeline();
+renderIncident();
+wireTrigger();
+refreshRecent();
+refreshMetrics();
+connect();
+
+// Poll metrics every 5s, refresh elapsed counter every 1s.
+setInterval(refreshMetrics, 5000);
+setInterval(refreshElapsed, 1000);
+</script>
+</body>
+</html>
