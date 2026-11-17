@@ -1,0 +1,47 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "autonomous-sre"
+version = "0.1.0"
+description = "Multi-agent system that takes a production alert to a verified, ready-to-merge pull request."
+readme = "README.md"
+requires-python = ">=3.11"
+dynamic = ["dependencies"]
+
+[project.optional-dependencies]
+dev = ["ruff>=0.8"]
+
+[project.scripts]
+autosre-demo = "scripts.demo:main"
+
+[tool.setuptools]
+packages = { find = { include = ["orchestrator*", "scripts"] } }
+
+[tool.setuptools.package-data]
+"orchestrator.dashboard" = ["static/*"]
+
+[tool.setuptools.dynamic]
+dependencies = { file = ["requirements.txt"] }
+
+[tool.pytest.ini_options]
+testpaths = ["tests", "victim_app/tests"]
+asyncio_default_fixture_loop_scope = "function"
+addopts = "-p no:cacheprovider"
+filterwarnings = [
+    # Third-party: omium still uses pydantic v1-style config.
+    "ignore:Support for class-based `config` is deprecated:DeprecationWarning",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+extend-exclude = [".venv", ".venv-linux"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W"]
+ignore = ["E501"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["F841"]

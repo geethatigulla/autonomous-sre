@@ -1,0 +1,23 @@
+# Runtime dependencies for the orchestrator (and the demo CLI).
+# Ranges: lower bound = version the test suite was verified against,
+# upper bound = next major. For an exact, reproducible install use
+# requirements.lock (what the Docker image installs).
+fastapi>=0.163,<1
+uvicorn[standard]>=0.54,<1
+pydantic>=2.14,<3
+pydantic-settings>=2.16,<3
+python-dotenv>=1.2,<2
+sqlmodel>=0.0.50,<0.1
+openai>=3.52,<4
+httpx>=0.28,<1
+pygithub>=2.10,<3
+tavily-python>=0.8.5,<1
+sse-starlette>=3.7,<4
+omium>=0.4.3,<0.5
+rich>=15,<16
+unidiff>=1.0.1,<2
+
+# The Verifier runs the target project's pytest suite inside a sandbox at
+# runtime, so pytest is a runtime dependency, not just a dev one.
+pytest>=9.2,<10
+pytest-asyncio>=1.5,<2
